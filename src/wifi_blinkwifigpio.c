@@ -6,7 +6,9 @@
 int main()
 {
     /* Must be set to zero when debugging else tick tests cause infinite loops */
+#ifdef DBGPAUSE
     timer_hw->dbgpause = 0;
+#endif
 
     stdio_init_all();
     if (cyw43_arch_init()) {

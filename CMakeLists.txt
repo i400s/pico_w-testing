@@ -19,6 +19,8 @@ project(wifi_blinkwifigpio C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+add_compile_definitions("DBGPAUSE=$<CONFIG:Debug>")
+
 # Add executable. Default name is the project name, version 0.1
 add_executable(wifi_blinkwifigpio src/wifi_blinkwifigpio.c )
 pico_set_program_name(wifi_blinkwifigpio "wifi_blinkwifigpio")
@@ -39,7 +41,7 @@ target_include_directories(wifi_blinkwifigpio PRIVATE
 )
 
 # Add any user requested libraries
-target_link_libraries(wifi_blinkwifigpio 
+target_link_libraries(wifi_blinkwifigpio
         pico_cyw43_arch_none
         )
 
