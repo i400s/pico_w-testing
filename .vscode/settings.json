@@ -1,0 +1,19 @@
+{
+  "cmake.statusbar.advanced": {
+    "debug" : {
+      "visibility": "hidden"
+              },
+    "launch" : {
+      "visibility": "hidden"
+               },
+    "build" : {
+      "visibility": "default"
+               },
+    "buildTarget" : {
+      "visibility": "hidden"
+               },
+    "launchTarget": {
+      "visibility": "hidden"
+               }
+    },
+}

@@ -1,0 +1,76 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  //
+  // This setup is configured for two "debug" Seeed xiao rp2040 boards linked with
+  // two Raspberry pico_w boards for the applications.
+  // It is of note that the "adapter serial" command is the only one needed to
+  // configre which debug adapter is accessed.
+  // VSCode sets up its own ports and numbers that are passed to openocd so you can't
+  // configure those from within config files. This caused hours of frustration.
+  // Debugging seems to work without requireing USE_CORE
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Pico Debug WithLCD",
+      "cwd": "${workspaceRoot}",
+      "executable": "${command:cmake.launchTargetPath}",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "gdbPath": "gdb-multiarch",
+      "device": "RP2040",
+      "openOCDPreConfigLaunchCommands": [
+        // "set USE_CORE 0",
+        "adapter speed 5000"
+      ],
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/rp2040.cfg"
+        ],
+        "openOCDLaunchCommands": [
+          "adapter serial 4150325537323115"
+
+        ],
+      "showDevDebugOutput": "none",
+      "svdFile": "${env:PICO_SDK_PATH}/src/rp2040/hardware_regs/rp2040.svd",
+      "runToEntryPoint": "main",
+      // Give restart the same functionality as runToEntryPoint - main
+      "postRestartCommands": [
+          "break main",
+          "continue"
+      ]
+    },
+    {
+      "name": "Pico Debug WithoutLCD",
+      "cwd": "${workspaceRoot}",
+      "executable": "${command:cmake.launchTargetPath}",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "gdbPath": "gdb-multiarch",
+      "device": "RP2040",
+      "openOCDPreConfigLaunchCommands": [
+        // "set USE_CORE 0",
+        "adapter speed 5000"
+      ],
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/rp2040.cfg"
+        ],
+        "openOCDLaunchCommands": [
+          "adapter serial 415032383337320D"
+
+        ],
+      "showDevDebugOutput": "raw",
+      "svdFile": "${env:PICO_SDK_PATH}/src/rp2040/hardware_regs/rp2040.svd",
+      "runToEntryPoint": "main",
+      // Give restart the same functionality as runToEntryPoint - main
+      "postRestartCommands": [
+          "break main",
+          "continue"
+      ]
+    }
+  ]
+}
