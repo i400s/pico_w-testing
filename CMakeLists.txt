@@ -37,7 +37,11 @@ set(WIFI_PASSWORD "${WIFI_PASSWORD}" CACHE INTERNAL "Hard coded WiFi password")
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-add_compile_definitions("DBGPAUSE=$<CONFIG:Debug>")
+add_compile_definitions("DBGPAUSE=$<CONFIG:Debug>"
+  WIFI_SSID=\"${WIFI_SSID}\"
+  WIFI_PASSWORD=\"${WIFI_PASSWORD}\"
+  )
+
 add_compile_options(-Werror=implicit-function-declaration)
 
 # Add executable. Default name is the project name, version 0.1
