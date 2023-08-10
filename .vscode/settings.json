@@ -16,4 +16,10 @@
       "visibility": "hidden"
                }
     },
+    // Yes these are real. Its not a problem.
+    // For some reason vscode not only sets an ENV setting, it also sets the CMake varable.
+    "cmake.environment": {
+      "WIFI_SSID": "5GDeathBeam",
+      "WIFI_PASSWORD": "LPEvq6TrhryuK3"
+    },
 }

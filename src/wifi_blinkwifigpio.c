@@ -5,6 +5,13 @@
 #include "hardware/rtc.h"
 #include "pico/util/datetime.h"
 
+#include <string.h>
+#include <time.h>
+
+#include "lwip/dns.h"
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
+
 int main()
 {
     /* Must be set to zero when debugging else tick tests cause infinite loops */

@@ -16,6 +16,24 @@ endif()
 
 project(wifi_blinkwifigpio C CXX ASM)
 
+# Slightly modified version from wifi examples as vscode sets both the ENV and CMake variable.
+if (DEFINED ENV{WIFI_SSID})
+  set(WIFI_SSID $ENV{WIFI_SSID})
+  message("Using WIFI_SSID from environment ('${WIFI_SSID}')")
+else()
+  message(FATAL_ERROR "WIFI SSID not supplied")
+endif()
+
+if (DEFINED ENV{WIFI_PASSWORD})
+  set(WIFI_PASSWORD $ENV{WIFI_PASSWORD})
+  message("Using WIFI_PASSWORD from environment ('${WIFI_PASSWORD}')")
+else()
+  message(FATAL_ERROR "WIFI PASSWORD not supplied")
+endif()
+
+set(WIFI_SSID "${WIFI_SSID}" CACHE INTERNAL "Hard coded WiFi SSID")
+set(WIFI_PASSWORD "${WIFI_PASSWORD}" CACHE INTERNAL "Hard coded WiFi password")
+
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
@@ -23,35 +41,38 @@ add_compile_definitions("DBGPAUSE=$<CONFIG:Debug>")
 add_compile_options(-Werror=implicit-function-declaration)
 
 # Add executable. Default name is the project name, version 0.1
-add_executable(wifi_blinkwifigpio src/wifi_blinkwifigpio.c )
-pico_set_program_name(wifi_blinkwifigpio "wifi_blinkwifigpio")
-pico_set_program_version(wifi_blinkwifigpio "0.1")
+add_executable(${PROJECT_NAME}
+        src/wifi_blinkwifigpio.c
+        )
+pico_set_program_name(${PROJECT_NAME} "wifi_blinkwifigpio")
+pico_set_program_version(${PROJECT_NAME} "0.1")
 
 # Allow stdio to ports
-pico_enable_stdio_uart(wifi_blinkwifigpio 1)
-pico_enable_stdio_usb(wifi_blinkwifigpio 1)
+pico_enable_stdio_uart(${PROJECT_NAME} 1)
+pico_enable_stdio_usb(${PROJECT_NAME} 1)
 
 # Add the standard library to the build
-target_link_libraries(wifi_blinkwifigpio
+target_link_libraries(${PROJECT_NAME}
         pico_stdlib)
 
 # Add the standard include files to the build
-target_include_directories(wifi_blinkwifigpio PRIVATE
+target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}
-  ${CMAKE_CURRENT_LIST_DIR}/.. # for our common lwipopts or any other standard includes, if required
-)
+  ${CMAKE_CURRENT_LIST_DIR}/include # Moved lwipopts.h from /.. to /include
+  )
 
 # Add any user requested libraries
 target_link_libraries(wifi_blinkwifigpio
-        pico_cyw43_arch_none
+        # pico_cyw43_arch_none  This is no longer required. It conflicts with threadsafe
         hardware_rtc # Pull in additional rtc support
+        pico_cyw43_arch_lwip_threadsafe_background
         )
 
 # Use 'no_flash' to not write to flash storage
 # 'copy_to_ram' to load into ram from flash.
 # 'default' for execute in place flash
 # 'blocked_ram' for something I don't understand.
-pico_set_binary_type(wifi_blinkwifigpio default)
+pico_set_binary_type(${PROJECT_NAME} default)
 
-pico_add_extra_outputs(wifi_blinkwifigpio)
+pico_add_extra_outputs(${PROJECT_NAME})
 
