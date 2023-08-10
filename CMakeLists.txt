@@ -20,6 +20,7 @@ project(wifi_blinkwifigpio C CXX ASM)
 pico_sdk_init()
 
 add_compile_definitions("DBGPAUSE=$<CONFIG:Debug>")
+add_compile_options(-Werror=implicit-function-declaration)
 
 # Add executable. Default name is the project name, version 0.1
 add_executable(wifi_blinkwifigpio src/wifi_blinkwifigpio.c )
@@ -43,6 +44,7 @@ target_include_directories(wifi_blinkwifigpio PRIVATE
 # Add any user requested libraries
 target_link_libraries(wifi_blinkwifigpio
         pico_cyw43_arch_none
+        hardware_rtc # Pull in additional rtc support
         )
 
 # Use 'no_flash' to not write to flash storage
