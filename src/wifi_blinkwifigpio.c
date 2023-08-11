@@ -121,10 +121,7 @@ static NTP_T* ntp_init(void) {
 }
 
 // Runs ntp test forever
-void run_ntp_test(void) {
-    NTP_T *state = ntp_init();
-    if (!state)
-        return;
+void run_ntp_test(NTP_T* state) {
     while(true) {
         if (absolute_time_diff_us(get_absolute_time(), state->ntp_test_time) < 0 && !state->dns_request_sent) {
             // Set alarm in case udp requests are lost
@@ -196,9 +193,18 @@ int main()
 
     if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 10000)) {
         printf("failed to connect\n");
-        return 1;
+        return -1;
     }
-    run_ntp_test();
+
+    // Initialise ntp communication chanel
+    NTP_T *state = ntp_init();
+    if (!state) {
+        printf("Failed to initialise ntp\n");
+        return -1;
+    }
+
+    run_ntp_test(state);
+
     cyw43_arch_deinit();
 
     while (true) {
