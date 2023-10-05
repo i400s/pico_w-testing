@@ -11,13 +11,6 @@
 #include "lwip/dns.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
-typedef struct NTP_T_ {
-    ip_addr_t ntp_server_address;
-    bool dns_request_sent;
-    struct udp_pcb *ntp_pcb;
-    absolute_time_t ntp_test_time;
-    alarm_id_t ntp_resend_alarm;
-} NTP_T;
 
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_MSG_LEN 48
@@ -26,12 +19,57 @@ typedef struct NTP_T_ {
 #define NTP_TEST_TIME (30 * 1000)
 #define NTP_RESEND_TIME (10 * 1000)
 
+#define ntp_packet_li(packet)   (uint8_t) ((packet->li_vn_mode & 0xC0) >> 6) // (li   & 11 000 000) >> 6
+#define ntp_packet_vn(packet)   (uint8_t) ((packet->li_vn_mode & 0x38) >> 3) // (vn   & 00 111 000) >> 3
+#define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
+
+typedef struct NTP_T_ {
+    ip_addr_t ntp_server_address;
+    bool dns_request_sent;
+    struct udp_pcb *ntp_pcb;
+    absolute_time_t ntp_test_time;
+    alarm_id_t ntp_resend_alarm;
+} NTP_T;
+
+// ntp time stamp structure
+struct ntp_ts_t {
+    uint32_t seconds;
+    uint32_t fraction;
+};
+
+// ntp udp data record
+struct ntp_packet_t {
+    u8_t li_vn_mode;
+    u8_t stratum;
+    u8_t poll;
+    u8_t precession;
+    u32_t root_delay;
+    u32_t root_dispersion;
+    u32_t ref_id;
+    struct ntp_ts_t ref_timestamp;
+    struct ntp_ts_t origin_timestamp;
+    struct ntp_ts_t receive_timestamp;
+    struct ntp_ts_t transmit_timestamp;
+} __attribute__((packed, aligned(1)));
+
 // Called with results of operation
 static void ntp_result(NTP_T* state, int status, time_t *result) {
     if (status == 0 && result) {
+        // Start on Friday 5th of June 2020 15:45:00
         struct tm *utc = gmtime(result);
-        printf("got ntp response: %02d/%02d/%04d %02d:%02d:%02d\n", utc->tm_mday, utc->tm_mon + 1, utc->tm_year + 1900,
-               utc->tm_hour, utc->tm_min, utc->tm_sec);
+        datetime_t t = {
+            .year  = utc->tm_year + 1900,
+            .month = utc->tm_mon + 1,
+            .day   = utc->tm_mday,
+            .dotw  = utc->tm_wday, // 0 is Sunday, so 5 is Friday
+            .hour  = utc->tm_hour,
+            .min   = utc->tm_min,
+            .sec   = utc->tm_sec
+        };
+        printf("got ntp response: %02d/%02d/%04d %02d:%02d:%02d\n", t.day, t.month, t.year,
+               t.hour, t.min, t.sec);
+        printf("Setting rtc\n");
+        rtc_set_datetime(&t);
     }
 
     if (state->ntp_resend_alarm > 0) {
@@ -81,25 +119,59 @@ static void ntp_dns_found(const char *hostname, const ip_addr_t *ipaddr, void *a
     }
 }
 
+// 1900/01/01 to 1970/01/01 is NTP_DELTA seconds. Remove those extra seconds to get unix time.
+void ntp_to_timeval(struct ntp_ts_t *ntp, struct timeval *tv) {
+    tv->tv_sec = ntp->seconds - NTP_DELTA;
+    tv->tv_usec = (uint32_t)((double)ntp->fraction * 1.0e6 / (double)(1LL << 32));
+}
+
+// 1900/01/01 to 1970/01/01 is NTP_DELTA seconds. Add those extra seconds to get ntp time.
+void timeval_to_ntp(struct timeval *tv, struct ntp_ts_t *ntp) {
+    ntp->seconds = tv->tv_sec + NTP_DELTA;
+    ntp->fraction = (uint32_t)((double)(tv->tv_usec + 1) * (double)(1LL << 32) * 1.0e-6);
+}
+
 // NTP data received
 static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
     NTP_T *state = (NTP_T*)arg;
     uint8_t mode = pbuf_get_at(p, 0) & 0x7;
     uint8_t stratum = pbuf_get_at(p, 1);
-
-    // Check the result
-    if (ip_addr_cmp(addr, &state->ntp_server_address) && port == NTP_PORT && p->tot_len == NTP_MSG_LEN &&
+    struct ntp_packet_t *ntp_packet;
+    ntp_packet = (struct ntp_packet_t *)calloc(1, sizeof(struct ntp_packet_t));
+    if (!ntp_packet) {
+        printf("failed to allocate ntp_data\n");
+        ntp_result(state, -1, NULL);
+    } else if (ip_addr_cmp(addr, &state->ntp_server_address) && port == NTP_PORT && p->tot_len == NTP_MSG_LEN &&
         mode == 0x4 && stratum != 0) {
         uint8_t seconds_buf[4] = {0};
         pbuf_copy_partial(p, seconds_buf, sizeof(seconds_buf), 40);
         uint32_t seconds_since_1900 = seconds_buf[0] << 24 | seconds_buf[1] << 16 | seconds_buf[2] << 8 | seconds_buf[3];
         uint32_t seconds_since_1970 = seconds_since_1900 - NTP_DELTA;
         time_t epoch = seconds_since_1970;
+        printf("Seconds since 1970 (%0lu)\n", seconds_since_1970);
         ntp_result(state, 0, &epoch);
+
+        uint8_t fract_buf[4] = {0};
+        pbuf_copy_partial(p, fract_buf, sizeof(fract_buf), 44);
+        uint32_t fractional_seconds = fract_buf[0] << 24 | fract_buf[1] << 16 | fract_buf[2] << 8 | fract_buf[3];
+        printf("Fractional seconds (%0lu)\n", fractional_seconds);
+
+        printf("sizeof(ntp_packet) %0u\n", sizeof(ntp_packet));
+        pbuf_copy_partial(p, ntp_packet, sizeof(*ntp_packet), 0);
+        printf("mode %0u\n", mode);
+        printf("ntp_packet_mode: %0u\n", ntp_packet_mode(ntp_packet));
+        // These two fields contain the time-stamp seconds as the packet left the NTP server.
+        // The number of seconds correspond to the seconds passed since 1900.
+        // ntohl() converts the bit/byte order from the network's to host's "endianness".
+        ntp_packet->transmit_timestamp.seconds = ntohl(ntp_packet->transmit_timestamp.seconds); // Time-stamp seconds.
+        ntp_packet->transmit_timestamp.fraction = ntohl(ntp_packet->transmit_timestamp.fraction); // Time-stamp fraction of a second.
+        printf("seconds since (%0u : %0u\n)", seconds_since_1900, ntp_packet->transmit_timestamp.seconds);
+        printf("%0u %0u %0u\n", ntp_packet_li(ntp_packet), ntp_packet_mode(ntp_packet), ntp_packet_vn(ntp_packet));
     } else {
         printf("invalid ntp response\n");
         ntp_result(state, -1, NULL);
     }
+    free(ntp_packet);
     pbuf_free(p);
 }
 
@@ -120,40 +192,36 @@ static NTP_T* ntp_init(void) {
     return state;
 }
 
-// Runs ntp test forever
-void run_ntp_test(NTP_T* state) {
-    while(true) {
-        if (absolute_time_diff_us(get_absolute_time(), state->ntp_test_time) < 0 && !state->dns_request_sent) {
-            // Set alarm in case udp requests are lost
-            state->ntp_resend_alarm = add_alarm_in_ms(NTP_RESEND_TIME, ntp_failed_handler, state, true);
+// Periodically send an ntp request which will be serviced via callbacks.
+static int32_t ntp_initiate_request(NTP_T *state) {
+    if (absolute_time_diff_us(get_absolute_time(), state->ntp_test_time) < 0 && !state->dns_request_sent) {
+        // Set alarm in case udp requests are lost
+        state->ntp_resend_alarm = add_alarm_in_ms(NTP_RESEND_TIME, ntp_failed_handler, state, true);
 
-            // cyw43_arch_lwip_begin/end should be used around calls into lwIP to ensure correct locking.
-            // You can omit them if you are in a callback from lwIP. Note that when using pico_cyw_arch_poll
-            // these calls are a no-op and can be omitted, but it is a good practice to use them in
-            // case you switch the cyw43_arch type later.
-            cyw43_arch_lwip_begin();
-            int err = dns_gethostbyname(NTP_SERVER, &state->ntp_server_address, ntp_dns_found, state);
-            cyw43_arch_lwip_end();
+        // cyw43_arch_lwip_begin/end should be used around calls into lwIP to ensure correct locking.
+        // You can omit them if you are in a callback from lwIP. Note that when using pico_cyw_arch_poll
+        // these calls are a no-op and can be omitted, but it is a good practice to use them in
+        // case you switch the cyw43_arch type later.
+        cyw43_arch_lwip_begin();
+        int err = dns_gethostbyname(NTP_SERVER, &state->ntp_server_address, ntp_dns_found, state);
+        cyw43_arch_lwip_end();
 
-            state->dns_request_sent = true;
-            if (err == ERR_OK) {
-                ntp_request(state); // Cached result
-            } else if (err != ERR_INPROGRESS) { // ERR_INPROGRESS means expect a callback
-                printf("dns request failed\n");
-                ntp_result(state, -1, NULL);
-            }
+        state->dns_request_sent = true;
+        if (err == ERR_OK) {
+            ntp_request(state); // Cached result
+        } else if (err != ERR_INPROGRESS) { // ERR_INPROGRESS means expect a callback
+            printf("dns request failed\n");
+            ntp_result(state, -1, NULL);
         }
-        // if you are not using pico_cyw43_arch_poll, then WiFI driver and lwIP work
-        // is done via interrupt in the background. This sleep is just an example of some (blocking)
-        // work you might be doing.
-        sleep_ms(1000);
     }
-    free(state);
 }
 
 int main()
 {
-    /* Must be set to zero when debugging else tick tests cause infinite loops */
+    // Must be set to zero when debugging else tick tests cause infinite loops.
+    // Additional information suggests that the issue is caused by debugging both
+    // cores (latest openocd default) when in reality only one is being worked on.
+    // As there is only one timer, when either core is halted the timer stops.
 #ifdef DBGPAUSE
     timer_hw->dbgpause = 0;
 #endif
@@ -203,11 +271,9 @@ int main()
         return -1;
     }
 
-    run_ntp_test(state);
-
-    cyw43_arch_deinit();
-
     while (true) {
+
+        ntp_initiate_request(state);
 
         rtc_get_datetime(&t);
         datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
@@ -220,4 +286,9 @@ int main()
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         sleep_ms(1250);
     }
+
+    // While we will never get here, this is the clean up.
+    free(state);
+    cyw43_arch_deinit();
+
 }

@@ -9,11 +9,12 @@
   // configre which debug adapter is accessed.
   // VSCode sets up its own ports and numbers that are passed to openocd so you can't
   // configure those from within config files. This caused hours of frustration.
-  // Debugging seems to work without requireing USE_CORE
+  // Debugging seems to work without requireing USE_CORE but now requires
+  // numberOfProcessors to be set manually.
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Pico Debug WithLCD",
+      "name": "15 Pico Debug",
       "cwd": "${workspaceRoot}",
       "executable": "${command:cmake.launchTargetPath}",
       "request": "launch",
@@ -21,6 +22,7 @@
       "servertype": "openocd",
       "gdbPath": "gdb-multiarch",
       "device": "RP2040",
+      "numberOfProcessors": 2,
       "openOCDPreConfigLaunchCommands": [
         // "set USE_CORE 0",
         "adapter speed 5000"
@@ -43,7 +45,7 @@
       ]
     },
     {
-      "name": "Pico Debug WithoutLCD",
+      "name": "0D Pico Debug",
       "cwd": "${workspaceRoot}",
       "executable": "${command:cmake.launchTargetPath}",
       "request": "launch",
@@ -51,6 +53,7 @@
       "servertype": "openocd",
       "gdbPath": "gdb-multiarch",
       "device": "RP2040",
+      "numberOfProcessors": 2,
       "openOCDPreConfigLaunchCommands": [
         // "set USE_CORE 0",
         "adapter speed 5000"
