@@ -69,6 +69,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(wifi_blinkwifigpio
         # pico_cyw43_arch_none  This is no longer required. It conflicts with threadsafe
         hardware_rtc # Pull in additional rtc support
+        hardware_pwm # Pull in pwm control
         pico_cyw43_arch_lwip_threadsafe_background
         )
 

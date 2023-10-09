@@ -1,16 +1,20 @@
 #include <stdio.h>
+#include <string.h>
+
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 #include "hardware/structs/timer.h"
 #include "hardware/rtc.h"
+#include "hardware/irq.h"
+#include "hardware/pwm.h"
 #include "pico/util/datetime.h"
-
-#include <string.h>
-#include <time.h>
 
 #include "lwip/dns.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
+
+#define BACKLIGHT_LED 3
+#define TOUCHSCREEN_IRQ 4
 
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_MSG_LEN 48
@@ -51,6 +55,38 @@ struct ntp_packet_t {
     struct ntp_ts_t receive_timestamp;
     struct ntp_ts_t transmit_timestamp;
 } __attribute__((packed, aligned(1)));
+
+void backlight_pwm_wrap() {
+    static int fade = 0;
+    static bool going_up;
+    pwm_clear_irq(pwm_gpio_to_slice_num(BACKLIGHT_LED));
+    if (going_up) {
+        ++fade;
+        if (fade > 255) {
+            fade = 255;
+            going_up = false;
+        }
+    } else {
+        --fade;
+        if (fade < 0) {
+            fade = 0;
+            going_up = true;
+        }
+    }
+    pwm_set_gpio_level(BACKLIGHT_LED, fade * fade);
+}
+
+static void backlight_init(void) {
+    gpio_set_function(BACKLIGHT_LED, GPIO_FUNC_PWM);
+    uint backlight_slice = pwm_gpio_to_slice_num(BACKLIGHT_LED);
+    pwm_clear_irq(backlight_slice);
+    pwm_set_irq_enabled(backlight_slice, true);
+    irq_set_exclusive_handler(PWM_IRQ_WRAP, backlight_pwm_wrap);
+    irq_set_enabled(PWM_IRQ_WRAP, true);
+    pwm_config backlight_config = pwm_get_default_config();
+    pwm_config_set_clkdiv(&backlight_config, 4.f);
+    pwm_init(backlight_slice, &backlight_config, true);
+}
 
 // Called with results of operation
 static void ntp_result(NTP_T* state, int status, time_t *result) {
@@ -228,7 +264,20 @@ int main()
 
     stdio_init_all();
 
-    printf("Hello RTC!\n");
+    printf("Pico is alive. \n");
+
+    /*const uint LED_PIN = BACKLIGHT_LED;
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+    while (true) {
+        gpio_put(LED_PIN, 1);
+        sleep_ms(250);
+        gpio_put(LED_PIN, 0);
+        sleep_ms(250);
+    }*/
+
+    printf("Initialising backlight. \n");
+    backlight_init();
 
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
