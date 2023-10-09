@@ -88,6 +88,49 @@ static void backlight_init(void) {
     pwm_init(backlight_slice, &backlight_config, true);
 }
 
+static char event_str[128];
+
+void gpio_event_string(char *buf, uint32_t events);
+
+void gpio_callback(uint gpio, uint32_t events) {
+    // Put the GPIO event(s) that just happened into event_str
+    // so we can print it
+    gpio_event_string(event_str, events);
+    printf("GPIO %d %s\n", gpio, event_str);
+}
+
+static void touchscreen_init() {
+    gpio_set_irq_enabled_with_callback(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+}
+
+static const char *gpio_irq_str[] = {
+        "LEVEL_LOW",  // 0x1
+        "LEVEL_HIGH", // 0x2
+        "EDGE_FALL",  // 0x4
+        "EDGE_RISE"   // 0x8
+};
+
+void gpio_event_string(char *buf, uint32_t events) {
+    for (uint i = 0; i < 4; i++) {
+        uint mask = (1 << i);
+        if (events & mask) {
+            // Copy this event string into the user string
+            const char *event_str = gpio_irq_str[i];
+            while (*event_str != '\0') {
+                *buf++ = *event_str++;
+            }
+            events &= ~mask;
+
+            // If more events add ", "
+            if (events) {
+                *buf++ = ',';
+                *buf++ = ' ';
+            }
+        }
+    }
+    *buf++ = '\0';
+}
+
 // Called with results of operation
 static void ntp_result(NTP_T* state, int status, time_t *result) {
     if (status == 0 && result) {
@@ -278,6 +321,9 @@ int main()
 
     printf("Initialising backlight. \n");
     backlight_init();
+
+    printf("Initialising touch screen. \n");
+    touchscreen_init();
 
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
