@@ -15,6 +15,8 @@
 
 #define BACKLIGHT_LED 3
 #define TOUCHSCREEN_IRQ 4
+#define BACKLIGHT_MAX 0xFFFF
+#define BACKLIGHT_STEP 15
 
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_MSG_LEN 48
@@ -26,6 +28,8 @@
 #define ntp_packet_li(packet)   (uint8_t) ((packet->li_vn_mode & 0xC0) >> 6) // (li   & 11 000 000) >> 6
 #define ntp_packet_vn(packet)   (uint8_t) ((packet->li_vn_mode & 0x38) >> 3) // (vn   & 00 111 000) >> 3
 #define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
+
+static int backlight_brightness = BACKLIGHT_MAX;
 
 typedef struct NTP_T_ {
     ip_addr_t ntp_server_address;
@@ -57,23 +61,17 @@ struct ntp_packet_t {
 } __attribute__((packed, aligned(1)));
 
 void backlight_pwm_wrap() {
-    static int fade = 0;
-    static bool going_up;
     pwm_clear_irq(pwm_gpio_to_slice_num(BACKLIGHT_LED));
-    if (going_up) {
-        ++fade;
-        if (fade > 255) {
-            fade = 255;
-            going_up = false;
-        }
-    } else {
-        --fade;
-        if (fade < 0) {
-            fade = 0;
-            going_up = true;
-        }
+    pwm_set_gpio_level(BACKLIGHT_LED, backlight_brightness);
+    if (backlight_brightness == 0) {
+        return;
     }
-    pwm_set_gpio_level(BACKLIGHT_LED, fade * fade);
+
+    // printf("brightness: %i\n", brightness);
+    backlight_brightness -= BACKLIGHT_STEP;
+    if (backlight_brightness <= BACKLIGHT_STEP) {
+        backlight_brightness = 0;
+    }
 }
 
 static void backlight_init(void) {
@@ -97,6 +95,7 @@ void gpio_callback(uint gpio, uint32_t events) {
     // so we can print it
     gpio_event_string(event_str, events);
     printf("GPIO %d %s\n", gpio, event_str);
+    backlight_brightness = BACKLIGHT_MAX;
 }
 
 static void touchscreen_init() {
