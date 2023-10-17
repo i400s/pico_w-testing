@@ -13,10 +13,10 @@
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 
-#define BACKLIGHT_LED 3
-#define TOUCHSCREEN_IRQ 4
-#define BACKLIGHT_MAX 0xFFFF
-#define BACKLIGHT_STEP 15
+#define BACKLIGHT_LED 7
+#define TOUCHSCREEN_IRQ 3
+#define BACKLIGHT_MAX 0xFF
+#define BACKLIGHT_STEP 35
 
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_MSG_LEN 48
@@ -29,7 +29,8 @@
 #define ntp_packet_vn(packet)   (uint8_t) ((packet->li_vn_mode & 0x38) >> 3) // (vn   & 00 111 000) >> 3
 #define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
 
-static int backlight_brightness = BACKLIGHT_MAX;
+static volatile int backlight_brightness = BACKLIGHT_MAX;
+static volatile alarm_id_t alarm_id = 0;
 
 typedef struct NTP_T_ {
     ip_addr_t ntp_server_address;
@@ -61,17 +62,46 @@ struct ntp_packet_t {
 } __attribute__((packed, aligned(1)));
 
 void backlight_pwm_wrap() {
+    static volatile int null_loop = 0;
+
     pwm_clear_irq(pwm_gpio_to_slice_num(BACKLIGHT_LED));
-    pwm_set_gpio_level(BACKLIGHT_LED, backlight_brightness);
+
+    if (alarm_id != 0) {
+        return;
+    }
+
+    // As we change the brightness in only 255 steps we need to
+    // lengthen the time it takes to perform the stepped fade.
+    if (null_loop <= BACKLIGHT_STEP) {
+        null_loop += 1;
+        return;
+    } else {
+        null_loop = 0;
+    }
+
+    pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
     if (backlight_brightness == 0) {
         return;
     }
 
     // printf("brightness: %i\n", brightness);
-    backlight_brightness -= BACKLIGHT_STEP;
-    if (backlight_brightness <= BACKLIGHT_STEP) {
+    backlight_brightness -= 1;
+    if (backlight_brightness <= 0) {
         backlight_brightness = 0;
     }
+}
+
+int64_t alarm_callback(alarm_id_t id, void *user_data) {
+    printf("Timer %d fired!\n", (int) id);
+
+    // if this timer firing is the one set by the touchscreen event
+    // then the timer is complete so it can be cleared.
+    if (id == alarm_id) {
+        printf("Alarm complete for id: %d\n", alarm_id);
+        alarm_id = 0;
+    }
+    // Can return a value here in us to fire in the future
+    return 0;
 }
 
 static void backlight_init(void) {
@@ -91,15 +121,27 @@ static char event_str[128];
 void gpio_event_string(char *buf, uint32_t events);
 
 void gpio_callback(uint gpio, uint32_t events) {
+
     // Put the GPIO event(s) that just happened into event_str
     // so we can print it
     gpio_event_string(event_str, events);
     printf("GPIO %d %s\n", gpio, event_str);
+
     backlight_brightness = BACKLIGHT_MAX;
+    pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
+
+    // If active alarm then cancel it
+    if (alarm_id > 0) {
+        cancel_alarm(alarm_id);
+        printf("Alarm canceled id: %d\n", alarm_id);
+    }
+    // Call alarm_callback in 60 seconds
+    alarm_id = add_alarm_in_ms(60000, alarm_callback, NULL, false);
+    printf("Alarm set id: %d\n", alarm_id);
 }
 
 static void touchscreen_init() {
-    gpio_set_irq_enabled_with_callback(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+    gpio_set_irq_enabled_with_callback(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
 }
 
 static const char *gpio_irq_str[] = {
@@ -243,7 +285,7 @@ static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_ad
         // ntohl() converts the bit/byte order from the network's to host's "endianness".
         ntp_packet->transmit_timestamp.seconds = ntohl(ntp_packet->transmit_timestamp.seconds); // Time-stamp seconds.
         ntp_packet->transmit_timestamp.fraction = ntohl(ntp_packet->transmit_timestamp.fraction); // Time-stamp fraction of a second.
-        printf("seconds since (%0u : %0u\n)", seconds_since_1900, ntp_packet->transmit_timestamp.seconds);
+        printf("seconds since (%0u : %0u)\n", seconds_since_1900, ntp_packet->transmit_timestamp.seconds);
         printf("%0u %0u %0u\n", ntp_packet_li(ntp_packet), ntp_packet_mode(ntp_packet), ntp_packet_vn(ntp_packet));
     } else {
         printf("invalid ntp response\n");
@@ -373,10 +415,10 @@ int main()
         datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
         printf("%s      \n", datetime_str);
 
-        printf("Blink LED ON\n");
+        // printf("Blink LED ON\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
         sleep_ms(1250);
-        printf("Blink LED OFF\n");
+        // printf("Blink LED OFF\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         sleep_ms(1250);
     }

@@ -24,4 +24,7 @@
       "WIFI_SSID": "5GDeathBeam",
       "WIFI_PASSWORD": "LPEvq6TrhryuK3"
     },
+    "files.associations": {
+      "compare": "c"
+    },
 }
