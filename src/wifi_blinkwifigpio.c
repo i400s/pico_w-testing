@@ -7,6 +7,7 @@
 #include "hardware/rtc.h"
 #include "hardware/irq.h"
 #include "hardware/pwm.h"
+#include "hardware/i2c.h"
 #include "pico/util/datetime.h"
 
 #include "lwip/dns.h"
@@ -18,6 +19,10 @@
 #define BACKLIGHT_MAX 0xFF
 #define BACKLIGHT_STEP 35
 
+#define I2C0_SCL_PIN 17
+#define I2C0_SDA_PIN 16
+#define MCP9808_IRQ 4
+
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_MSG_LEN 48
 #define NTP_PORT 123
@@ -28,6 +33,17 @@
 #define ntp_packet_li(packet)   (uint8_t) ((packet->li_vn_mode & 0xC0) >> 6) // (li   & 11 000 000) >> 6
 #define ntp_packet_vn(packet)   (uint8_t) ((packet->li_vn_mode & 0x38) >> 3) // (vn   & 00 111 000) >> 3
 #define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
+
+//The bus address is determined by the state of pins A0, A1 and A2 on the MCP9808 board
+static uint8_t MCP9808_ADDRESS[4] = {0x18, 0x19, 0x1A, 0x1B};
+//hardware registers
+const uint8_t REG_POINTER = 0x00;
+const uint8_t REG_CONFIG = 0x01;
+const uint8_t REG_TEMP_UPPER = 0x02;
+const uint8_t REG_TEMP_LOWER = 0x03;
+const uint8_t REG_TEMP_CRIT = 0x04;
+const uint8_t REG_TEMP_AMB = 0x05;
+const uint8_t REG_RESOLUTION = 0x08;
 
 static volatile int backlight_brightness = BACKLIGHT_MAX;
 static volatile alarm_id_t alarm_id = 0;
@@ -142,6 +158,75 @@ void gpio_callback(uint gpio, uint32_t events) {
 
 static void touchscreen_init() {
     gpio_set_irq_enabled_with_callback(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+}
+
+static void i2c0_init() {
+    i2c_init(i2c0, 400 * 1000);
+    gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(I2C0_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C0_SCL_PIN);
+    gpio_pull_up(I2C0_SDA_PIN);
+}
+
+void mcp9808_set_limits(uint8_t i) {
+
+    //Set an upper limit of 30°C for the temperature
+    uint8_t upper_temp_msb = 0x01;
+    uint8_t upper_temp_lsb = 0xE0;
+
+    //Set a lower limit of 20°C for the temperature
+    uint8_t lower_temp_msb = 0x01;
+    uint8_t lower_temp_lsb = 0x40;
+
+    //Set a critical limit of 40°C for the temperature
+    uint8_t crit_temp_msb = 0x02;
+    uint8_t crit_temp_lsb = 0x80;
+
+    uint8_t buf[3];
+    buf[0] = REG_TEMP_UPPER;
+    buf[1] = upper_temp_msb;
+    buf[2] = upper_temp_lsb;
+    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+
+    buf[0] = REG_TEMP_LOWER;
+    buf[1] = lower_temp_msb;
+    buf[2] = lower_temp_lsb;
+    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+
+    buf[0] = REG_TEMP_CRIT;
+    buf[1] = crit_temp_msb;
+    buf[2] = crit_temp_lsb;;
+    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+}
+
+void mcp9808_check_limits(uint8_t upper_byte) {
+
+    // Check flags and raise alerts accordingly
+    if ((upper_byte & 0x40) == 0x40) { //TA > TUPPER
+        printf(" >UL");
+    }
+    if ((upper_byte & 0x20) == 0x20) { //TA < TLOWER
+        printf(" <LL");
+    }
+    if ((upper_byte & 0x80) == 0x80) { //TA > TCRIT
+        printf(" >CT");
+    }
+}
+
+float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte) {
+
+    float temperature;
+
+
+    //Check if TA <= 0°C and convert to denary accordingly
+    if ((upper_byte & 0x10) == 0x10) {
+        upper_byte = upper_byte & 0x0F;
+        temperature = 256 - (((float) upper_byte * 16) + ((float) lower_byte / 16));
+    } else {
+        temperature = (((float) upper_byte * 16) + ((float) lower_byte / 16));
+
+    }
+    return temperature;
 }
 
 static const char *gpio_irq_str[] = {
@@ -366,6 +451,14 @@ int main()
     printf("Initialising touch screen. \n");
     touchscreen_init();
 
+    printf("Initialising i2c0. \n");
+    i2c0_init();
+
+    for (uint8_t i = 0; i < 4; i++) {
+        printf("Initialising mcp9808 device: %d \n", MCP9808_ADDRESS[i]);
+        mcp9808_set_limits(i);
+    }
+
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
 
@@ -407,6 +500,12 @@ int main()
         return -1;
     }
 
+    uint8_t buf[2];
+    uint16_t upper_byte;
+    uint16_t lower_byte;
+
+    float temperature;
+
     while (true) {
 
         ntp_initiate_request(state);
@@ -415,9 +514,33 @@ int main()
         datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
         printf("%s      \n", datetime_str);
 
+        printf("Temp: ");
+        for (uint8_t i = 0; i < 4; i++) {
+            // Start reading ambient temperature register for 2 bytes
+            if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_TEMP_AMB, 1, true) < 0) {
+                printf("*write-error*");
+            }
+            if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) < 0) {
+                printf("*read-error*");
+            }
+
+            upper_byte = buf[0];
+            lower_byte = buf[1];
+
+            //clears flag bits in upper byte
+            temperature = mcp9808_convert_temp(upper_byte & 0x1F, lower_byte);
+            printf("(%d: %.4f°C", MCP9808_ADDRESS[i], temperature);
+
+            //isolates limit flags in upper byte
+            mcp9808_check_limits(upper_byte & 0xE0);
+            printf(")    ");
+        }
+        printf("\n");
+
         // printf("Blink LED ON\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
         sleep_ms(1250);
+
         // printf("Blink LED OFF\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         sleep_ms(1250);
