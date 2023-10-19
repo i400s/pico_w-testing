@@ -197,6 +197,10 @@ void mcp9808_set_limits(uint8_t i) {
     buf[1] = crit_temp_msb;
     buf[2] = crit_temp_lsb;;
     i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+
+    buf[0] = REG_RESOLUTION;
+    buf[1] = 0x01; // .25°C resolution
+    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false);
 }
 
 void mcp9808_check_limits(uint8_t upper_byte) {
@@ -208,8 +212,8 @@ void mcp9808_check_limits(uint8_t upper_byte) {
     if ((upper_byte & 0x20) == 0x20) { //TA < TLOWER
         printf(" <LL");
     }
-    if ((upper_byte & 0x80) == 0x80) { //TA > TCRIT
-        printf(" >CT");
+    if ((upper_byte & 0x80) == 0x80) { //TA >= TCRIT
+        printf(" >=CT");
     }
 }
 
@@ -519,9 +523,10 @@ int main()
             // Start reading ambient temperature register for 2 bytes
             if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_TEMP_AMB, 1, true) < 0) {
                 printf("*write-error*");
-            }
-            if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) < 0) {
+                continue;
+            } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) < 0) {
                 printf("*read-error*");
+                continue;
             }
 
             upper_byte = buf[0];
