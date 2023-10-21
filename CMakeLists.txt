@@ -53,7 +53,7 @@ pico_set_program_version(${PROJECT_NAME} "0.1")
 
 # Allow stdio to ports
 pico_enable_stdio_uart(${PROJECT_NAME} 1)
-pico_enable_stdio_usb(${PROJECT_NAME} 1)
+# pico_enable_stdio_usb(${PROJECT_NAME} 1)
 
 # Add the standard library to the build
 target_link_libraries(${PROJECT_NAME}
