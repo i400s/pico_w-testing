@@ -135,29 +135,44 @@ static void backlight_init(void) {
 static char event_str[128];
 
 void gpio_event_string(char *buf, uint32_t events);
+void mcp9808_reset_irq(uint8_t i);
 
 void gpio_callback(uint gpio, uint32_t events) {
 
     // Put the GPIO event(s) that just happened into event_str
     // so we can print it
     gpio_event_string(event_str, events);
-    printf("GPIO %d %s\n", gpio, event_str);
+    printf("GPIO %d %s ", gpio, event_str);
 
-    backlight_brightness = BACKLIGHT_MAX;
-    pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
+    switch(gpio)
+    {
+        case TOUCHSCREEN_IRQ:
+            backlight_brightness = BACKLIGHT_MAX;
+            pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
 
-    // If active alarm then cancel it
-    if (alarm_id > 0) {
-        cancel_alarm(alarm_id);
-        printf("Alarm canceled id: %d\n", alarm_id);
+            // If active alarm then cancel it
+            if (alarm_id > 0) {
+                cancel_alarm(alarm_id);
+                printf("Cancel: %d ", alarm_id);
+            }
+            // Call alarm_callback in 60 seconds
+            alarm_id = add_alarm_in_ms(60000, alarm_callback, NULL, false);
+            printf("Set: %d ", alarm_id);
+            break;
+        case MCP9808_IRQ:
+            for (uint8_t i = 0; i < 4; i++) {
+                mcp9808_reset_irq(i);
+            }
+            break;
     }
-    // Call alarm_callback in 60 seconds
-    alarm_id = add_alarm_in_ms(60000, alarm_callback, NULL, false);
-    printf("Alarm set id: %d\n", alarm_id);
+    printf("\n");
 }
 
 static void touchscreen_init() {
-    gpio_set_irq_enabled_with_callback(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true, &gpio_callback);
+    gpio_set_irq_enabled(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_callback(&gpio_callback);
+    irq_set_enabled(IO_IRQ_BANK0, true);
+    gpio_pull_up(TOUCHSCREEN_IRQ);
 }
 
 static void i2c0_init() {
@@ -168,52 +183,174 @@ static void i2c0_init() {
     gpio_pull_up(I2C0_SDA_PIN);
 }
 
+void mcp9808_set_limits(uint8_t i);
+
+static void mcp9808_init() {
+
+    float temp = 0.0;
+    int16_t whole = 0;
+    int16_t decimal = 0;
+    uint16_t result = 0;
+
+    temp = 19.00; // LT
+    whole = (int16_t)temp << 4;
+    decimal = (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    result = whole | decimal;
+    printf("LT-%2.2f whole (%d) (%x) ", temp, whole, whole);
+    printf("decimal (%d) (%x) ", decimal, decimal);
+    printf("result (%d) (%x) ", result, result);
+    result = (int16_t)temp << 4 | (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    printf("full (%2.2f) (%d) (%x) \n", temp, result, result);
+
+    temp = 21.75; // LT+hysteresis(1.5)+1.25
+    whole = (int16_t)temp << 4;
+    decimal = (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    result = whole | decimal;
+    printf("UT-%2.2f whole (%d) (%x) ", temp, whole, whole);
+    printf("decimal (%d) (%x) ", decimal, decimal);
+    printf("result (%d) (%x) ", result, result);
+    result = (int16_t)temp << 4 | (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    printf("full (%2.2f) (%d) (%x) \n", temp, result, result);
+
+    temp = 24.00; //UT+hysteresis(1.5)+.75
+    whole = (int16_t)temp << 4;
+    decimal = (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    result = whole | decimal;
+    printf("CT-%2.2f whole (%d) (%x) ", temp, whole, whole);
+    printf("decimal (%d) (%x) ", decimal, decimal);
+    printf("result (%d) (%x) ", result, result);
+    result = (int16_t)temp << 4 | (int16_t)((temp - (int16_t)temp) / .25) << 2;
+    printf("full (%2.2f) (%d) (%x) \n", temp, result, result);
+
+    gpio_set_irq_enabled(MCP9808_IRQ, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_callback(&gpio_callback);
+    irq_set_enabled(IO_IRQ_BANK0, true);
+    gpio_pull_up(MCP9808_IRQ);
+
+    //
+    for (uint8_t i = 0; i < 4; i++) {
+        mcp9808_set_limits(i);
+    }
+}
+
 void mcp9808_set_limits(uint8_t i) {
 
-    //Set an upper limit of 30°C for the temperature
-    uint8_t upper_temp_msb = 0x01;
-    uint8_t upper_temp_lsb = 0xE0;
-
-    //Set a lower limit of 20°C for the temperature
+    //Set a lower limit of 19.00°C for the temperature
     uint8_t lower_temp_msb = 0x01;
-    uint8_t lower_temp_lsb = 0x40;
+    uint8_t lower_temp_lsb = 0x30;
 
-    //Set a critical limit of 40°C for the temperature
-    uint8_t crit_temp_msb = 0x02;
+    //Set an upper limit of 21.75°C for the temperature
+    uint8_t upper_temp_msb = 0x01;
+    uint8_t upper_temp_lsb = 0x5C;
+
+    //Set a critical limit of 24.00°C for the temperature
+    uint8_t crit_temp_msb = 0x01;
     uint8_t crit_temp_lsb = 0x80;
 
     uint8_t buf[3];
-    buf[0] = REG_TEMP_UPPER;
-    buf[1] = upper_temp_msb;
-    buf[2] = upper_temp_lsb;
-    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+
+    printf("Init (%d", MCP9808_ADDRESS[i]);
 
     buf[0] = REG_TEMP_LOWER;
     buf[1] = lower_temp_msb;
     buf[2] = lower_temp_lsb;
-    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) <0) {
+        printf("*WE*");
+    } else {
+        printf(":LT-%02x%02x", buf[1], buf[2]);
+    }
+
+    buf[0] = REG_TEMP_UPPER;
+    buf[1] = upper_temp_msb;
+    buf[2] = upper_temp_lsb;
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) <0) {
+        printf("*WE*");
+    } else {
+        printf(":UT-%02x%02x", buf[1], buf[2]);
+    }
 
     buf[0] = REG_TEMP_CRIT;
     buf[1] = crit_temp_msb;
     buf[2] = crit_temp_lsb;;
-    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false);
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) <0) {
+        printf("*WE*");
+    } else {
+        printf(":CT-%02x%02x", buf[1], buf[2]);
+    }
 
     buf[0] = REG_RESOLUTION;
     buf[1] = 0x01; // .25°C resolution
-    i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false);
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) <0) {
+        printf("*WE*");
+    } else {
+        printf(":RS-%02x", buf[1]);
+    }
+
+    buf[0] = REG_CONFIG;
+    buf[1] = 0x02; // 21:Hysteresis 1.5°C
+    buf[2] = 0x39; // 5:Interrupt clear 3:Alert 0:interrupt mode
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) < 0) {
+        printf("*WE*");
+    } else {
+        printf(":CN-%02x%02x", buf[1], buf[2]);
+    }
+
+    buf[1] = 0;
+    buf[2] = 0;
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
+        printf("*WE*");
+    } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
+        printf("*RE*");
+    } else {
+        printf(":%02x%02x*OK*) ", buf[1], buf[2]);
+    }
+
+    printf("\n");
+
+}
+
+void mcp9808_reset_irq(uint8_t i) {
+    uint8_t buf[3];
+    printf("(%d ", MCP9808_ADDRESS[i]);
+    buf[0] = REG_CONFIG;
+    buf[1] = 0;
+    buf[2] = 0;
+    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
+        printf("*WE*");
+    } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
+        printf("*RE*");
+    } else {
+        printf(":%02x%02x*OK*", buf[1], buf[2]);
+        if (buf[2] & (1 << 4)) { // 4:Interrupt this device
+            buf[2] |= (1 << 5); // 5:Interrupt clear
+            printf("\033[0;32m:%02x%02x", buf[1], buf[2]);
+            if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) < 0) {
+                printf("*WE*");
+            } else if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
+                printf("*WE*");
+            } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
+                printf("*RE*");
+            } else {
+                printf(":%02x%02x*OK*", buf[1], buf[2]);
+            }
+            printf("\033[0m");
+        }
+        printf(") ");
+    }
+
 }
 
 void mcp9808_check_limits(uint8_t upper_byte) {
 
     // Check flags and raise alerts accordingly
-    if ((upper_byte & 0x40) == 0x40) { //TA > TUPPER
-        printf(" >UL");
+    if ((upper_byte & 0x40) == 0x40) { //TA > T-UPPER
+        printf("\033[0;32m*UL*\033[0m");
     }
-    if ((upper_byte & 0x20) == 0x20) { //TA < TLOWER
-        printf(" <LL");
+    if ((upper_byte & 0x20) == 0x20) { //TA < T-LOWER
+        printf("\033[0;32m*LL*\033[0m");
     }
-    if ((upper_byte & 0x80) == 0x80) { //TA >= TCRIT
-        printf(" >=CT");
+    if ((upper_byte & 0x80) == 0x80) { //TA >= T-CRIT
+        printf("\033[0;32m*CT*\033[0m");
     }
 }
 
@@ -231,6 +368,43 @@ float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte) {
 
     }
     return temperature;
+}
+
+void mcp9808_process() {
+
+    uint8_t buf[2];
+    uint16_t upper_byte;
+    uint16_t lower_byte;
+
+    float temperature;
+
+    printf("Temp: ");
+
+    for (uint8_t i = 0; i < 4; i++) {
+        // Start reading ambient temperature register for 2 bytes
+        if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_TEMP_AMB, 1, true) < 0) {
+            printf("*WE*");
+            continue;
+        } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) < 0) {
+            printf("*RE*");
+            continue;
+        }
+
+        upper_byte = buf[0];
+        lower_byte = buf[1];
+
+        // printf("UB:%x ", upper_byte);
+
+        //clears flag bits in upper byte
+        temperature = mcp9808_convert_temp(upper_byte & 0x1F, lower_byte);
+        printf("(%d: %.2f°C", MCP9808_ADDRESS[i], temperature);
+
+        //isolates limit flags in upper byte
+        mcp9808_check_limits(upper_byte & 0xE0);
+
+        printf(") ");
+    }
+    printf("\n");
 }
 
 static const char *gpio_irq_str[] = {
@@ -458,10 +632,8 @@ int main()
     printf("Initialising i2c0. \n");
     i2c0_init();
 
-    for (uint8_t i = 0; i < 4; i++) {
-        printf("Initialising mcp9808 device: %d \n", MCP9808_ADDRESS[i]);
-        mcp9808_set_limits(i);
-    }
+    printf("Initialising mcp9808 devices. \n");
+    mcp9808_init();
 
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
@@ -504,12 +676,6 @@ int main()
         return -1;
     }
 
-    uint8_t buf[2];
-    uint16_t upper_byte;
-    uint16_t lower_byte;
-
-    float temperature;
-
     while (true) {
 
         ntp_initiate_request(state);
@@ -518,29 +684,7 @@ int main()
         datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
         printf("%s      \n", datetime_str);
 
-        printf("Temp: ");
-        for (uint8_t i = 0; i < 4; i++) {
-            // Start reading ambient temperature register for 2 bytes
-            if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_TEMP_AMB, 1, true) < 0) {
-                printf("*write-error*");
-                continue;
-            } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], buf, 2, false) < 0) {
-                printf("*read-error*");
-                continue;
-            }
-
-            upper_byte = buf[0];
-            lower_byte = buf[1];
-
-            //clears flag bits in upper byte
-            temperature = mcp9808_convert_temp(upper_byte & 0x1F, lower_byte);
-            printf("(%d: %.4f°C", MCP9808_ADDRESS[i], temperature);
-
-            //isolates limit flags in upper byte
-            mcp9808_check_limits(upper_byte & 0xE0);
-            printf(")    ");
-        }
-        printf("\n");
+        mcp9808_process();
 
         // printf("Blink LED ON\n");
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
