@@ -35,7 +35,7 @@
 #define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
 
 //The bus address is determined by the state of pins A0, A1 and A2 on the MCP9808 board
-static uint8_t MCP9808_ADDRESS[4] = {0x18, 0x19, 0x1A, 0x1B};
+const uint8_t MCP9808_ADDRESS[4] = {0x18, 0x19, 0x1A, 0x1B};
 //hardware registers
 const uint8_t REG_POINTER = 0x00;
 const uint8_t REG_CONFIG = 0x01;
@@ -77,7 +77,7 @@ struct ntp_packet_t {
     struct ntp_ts_t transmit_timestamp;
 } __attribute__((packed, aligned(1)));
 
-void backlight_pwm_wrap() {
+void backlight_pwm_wrap(void) {
     static volatile int null_loop = 0;
 
     pwm_clear_irq(pwm_gpio_to_slice_num(BACKLIGHT_LED));
@@ -168,14 +168,14 @@ void gpio_callback(uint gpio, uint32_t events) {
     printf("\n");
 }
 
-static void touchscreen_init() {
+static void touchscreen_init(void) {
     gpio_set_irq_enabled(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true);
     gpio_set_irq_callback(&gpio_callback);
     irq_set_enabled(IO_IRQ_BANK0, true);
     gpio_pull_up(TOUCHSCREEN_IRQ);
 }
 
-static void i2c0_init() {
+static void i2c0_init(void) {
     i2c_init(i2c0, 400 * 1000);
     gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
     gpio_set_function(I2C0_SDA_PIN, GPIO_FUNC_I2C);
@@ -185,7 +185,7 @@ static void i2c0_init() {
 
 void mcp9808_set_limits(uint8_t i);
 
-static void mcp9808_init() {
+static void mcp9808_init(void) {
 
     float temp = 0.0;
     int16_t whole = 0;
@@ -370,7 +370,7 @@ float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte) {
     return temperature;
 }
 
-void mcp9808_process() {
+void mcp9808_process(void) {
 
     uint8_t buf[2];
     uint16_t upper_byte;
