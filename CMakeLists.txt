@@ -47,6 +47,7 @@ add_compile_options(-Werror=implicit-function-declaration)
 # Add executable. Default name is the project name, version 0.1
 add_executable(${PROJECT_NAME}
         src/mcp9808.c
+        src/ntp_cyw43.c
         src/wifi_blinkwifigpio.c
         )
 pico_set_program_name(${PROJECT_NAME} "wifi_blinkwifigpio")
