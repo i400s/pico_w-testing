@@ -3,130 +3,16 @@
 
 #include "pico/stdlib.h"
 #include "hardware/irq.h"
-#include "hardware/pwm.h"
 #include "hardware/i2c.h"
 #include "pico/util/datetime.h"
-
 #include "src/mcp9808.h"
 #include "src/ntp_cyw43.h"
-
-#define BACKLIGHT_LED 7
-#define TOUCHSCREEN_IRQ 3
-#define BACKLIGHT_MAX 0xFF
-#define BACKLIGHT_STEP 35
+#include "src/msp2807.h"
 
 #define I2C0_SCL_PIN 17
 #define I2C0_SDA_PIN 16
 
-static volatile int backlight_brightness = BACKLIGHT_MAX;
-static volatile alarm_id_t alarm_id = 0;
-
-
-void backlight_pwm_wrap(void) {
-    static volatile int null_loop = 0;
-
-    pwm_clear_irq(pwm_gpio_to_slice_num(BACKLIGHT_LED));
-
-    if (alarm_id != 0) {
-        return;
-    }
-
-    // As we change the brightness in only 255 steps we need to
-    // lengthen the time it takes to perform the stepped fade.
-    if (null_loop <= BACKLIGHT_STEP) {
-        null_loop += 1;
-        return;
-    } else {
-        null_loop = 0;
-    }
-
-    pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
-    if (backlight_brightness == 0) {
-        return;
-    }
-
-    // printf("brightness: %i\n", brightness);
-    backlight_brightness -= 1;
-    if (backlight_brightness <= 0) {
-        backlight_brightness = 0;
-    }
-}
-
-int64_t alarm_callback(alarm_id_t id, void *user_data) {
-    printf("Timer %d fired!\n", (int) id);
-
-    // if this timer firing is the one set by the touchscreen event
-    // then the timer is complete so it can be cleared.
-    if (id == alarm_id) {
-        printf("Alarm complete for id: %d\n", alarm_id);
-        alarm_id = 0;
-    }
-    // Can return a value here in us to fire in the future
-    return 0;
-}
-
-static void backlight_init(void) {
-    gpio_set_function(BACKLIGHT_LED, GPIO_FUNC_PWM);
-    uint backlight_slice = pwm_gpio_to_slice_num(BACKLIGHT_LED);
-    pwm_clear_irq(backlight_slice);
-    pwm_set_irq_enabled(backlight_slice, true);
-    irq_set_exclusive_handler(PWM_IRQ_WRAP, backlight_pwm_wrap);
-    irq_set_enabled(PWM_IRQ_WRAP, true);
-    pwm_config backlight_config = pwm_get_default_config();
-    pwm_config_set_clkdiv(&backlight_config, 4.f);
-    pwm_init(backlight_slice, &backlight_config, true);
-}
-
 static char event_str[128];
-
-void gpio_event_string(char *buf, uint32_t events);
-
-void gpio_callback(uint gpio, uint32_t events) {
-
-    // Put the GPIO event(s) that just happened into event_str
-    // so we can print it
-    gpio_event_string(event_str, events);
-    printf("GPIO %d %s ", gpio, event_str);
-
-    switch(gpio)
-    {
-        case TOUCHSCREEN_IRQ:
-            backlight_brightness = BACKLIGHT_MAX;
-            pwm_set_gpio_level(BACKLIGHT_LED, (backlight_brightness * backlight_brightness));
-
-            // If active alarm then cancel it
-            if (alarm_id > 0) {
-                cancel_alarm(alarm_id);
-                printf("Cancel: %d ", alarm_id);
-            }
-            // Call alarm_callback in 60 seconds
-            alarm_id = add_alarm_in_ms(60000, alarm_callback, NULL, false);
-            printf("Set: %d ", alarm_id);
-            break;
-        case MCP9808_IRQ:
-            for (uint8_t i = 0; i < 4; i++) {
-                mcp9808_reset_irq(i);
-            }
-            break;
-    }
-    printf("\n");
-}
-
-static void touchscreen_init(void) {
-    gpio_set_irq_enabled(TOUCHSCREEN_IRQ, GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_callback(&gpio_callback);
-    irq_set_enabled(IO_IRQ_BANK0, true);
-    gpio_pull_up(TOUCHSCREEN_IRQ);
-}
-
-static void i2c0_init(void) {
-    i2c_init(i2c0, 400 * 1000);
-    gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(I2C0_SDA_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(I2C0_SCL_PIN);
-    gpio_pull_up(I2C0_SDA_PIN);
-}
-
 
 static const char *gpio_irq_str[] = {
         "LEVEL_LOW",  // 0x1
@@ -156,6 +42,46 @@ void gpio_event_string(char *buf, uint32_t events) {
     *buf++ = '\0';
 }
 
+void gpio_callback(uint gpio, uint32_t events) {
+
+    // Put the GPIO event(s) that just happened into event_str
+    // so we can print it
+    gpio_event_string(event_str, events);
+    printf("GPIO %d %s ", gpio, event_str);
+
+    switch(gpio)
+    {
+        case TOUCHSCREEN_IRQ:
+            msp2807_reset_irq();
+            break;
+        case MCP9808_IRQ:
+            for (uint8_t i = 0; i < 4; i++) {
+                mcp9808_reset_irq(i);
+            }
+            break;
+    }
+    printf("\n");
+}
+
+int64_t alarm_callback(alarm_id_t id, void *user_data) {
+    printf("Timer %d fired!\n", (int) id);
+
+    backlight_check_timer(id);
+
+    // Can return a value here in us to fire in the future
+    return 0;
+}
+
+static void i2c0_init(void) {
+    i2c_init(i2c0, 400 * 1000);
+    gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(I2C0_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C0_SCL_PIN);
+    gpio_pull_up(I2C0_SDA_PIN);
+}
+
+
+
 int main()
 {
     // Must be set to zero when debugging else tick tests cause infinite loops.
@@ -181,10 +107,10 @@ int main()
     }*/
 
     printf("Initialising backlight. \n");
-    backlight_init();
+    backlight_init(alarm_callback);
 
     printf("Initialising touch screen. \n");
-    touchscreen_init();
+    touchscreen_init(&gpio_callback);
 
     printf("Initialising i2c0. \n");
     i2c0_init();
