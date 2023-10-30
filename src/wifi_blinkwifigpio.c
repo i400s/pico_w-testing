@@ -8,6 +8,7 @@
 #include "src/mcp9808.h"
 #include "src/ntp_cyw43.h"
 #include "src/msp2807.h"
+#include "src/cyw43_blink_led.h"
 
 #define I2C0_SCL_PIN 17
 #define I2C0_SDA_PIN 16
@@ -70,6 +71,11 @@ int64_t alarm_callback(alarm_id_t id, void *user_data) {
     return 0;
 }
 
+bool timer_callback(repeating_timer_t *rt) {
+    cyw43_blink_led(rt->alarm_id);
+    return true;
+}
+
 static void i2c0_init(void) {
     i2c_init(i2c0, 400 * 1000);
     gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
@@ -106,6 +112,14 @@ int main()
     printf("Initialising mcp9808 devices. \n");
     mcp9808_init(gpio_callback);
 
+    if (cyw43_arch_init()) {
+        printf("Wi-Fi init failed");
+        return -1;
+    }
+
+    printf("Initialising cyw43 blink led \n");
+    cyw43_blink_led_init(timer_callback);
+
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
 
@@ -128,11 +142,6 @@ int main()
     // tbe delay is up to 3 RTC clock cycles (which is 64us with the default clock settings)
     sleep_us(64);
 
-    if (cyw43_arch_init()) {
-        printf("Wi-Fi init failed");
-        return -1;
-    }
-
     cyw43_arch_enable_sta_mode();
 
     if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 10000)) {
@@ -148,7 +157,7 @@ int main()
     }
 
     while (true) {
-
+        continue;
         ntp_initiate_request(state);
 
         rtc_get_datetime(&t);
@@ -157,13 +166,6 @@ int main()
 
         mcp9808_process();
 
-        // printf("Blink LED ON\n");
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-        sleep_ms(1250);
-
-        // printf("Blink LED OFF\n");
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-        sleep_ms(1250);
     }
 
     // While we will never get here, this is the clean up.
