@@ -98,13 +98,13 @@ int main()
     backlight_init(alarm_callback);
 
     printf("Initialising touch screen. \n");
-    touchscreen_init(&gpio_callback);
+    touchscreen_init(gpio_callback);
 
     printf("Initialising i2c0. \n");
     i2c0_init();
 
     printf("Initialising mcp9808 devices. \n");
-    mcp9808_init(&gpio_callback);
+    mcp9808_init(gpio_callback);
 
     char datetime_buf[256];
     char *datetime_str = &datetime_buf[0];
