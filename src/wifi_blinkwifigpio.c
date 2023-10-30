@@ -12,16 +12,14 @@
 #define I2C0_SCL_PIN 17
 #define I2C0_SDA_PIN 16
 
-static char event_str[128];
-
-static const char *gpio_irq_str[] = {
+void gpio_event_string(char *buf, uint32_t events) {
+    static const char *gpio_irq_str[] = {
         "LEVEL_LOW",  // 0x1
         "LEVEL_HIGH", // 0x2
         "EDGE_FALL",  // 0x4
         "EDGE_RISE"   // 0x8
-};
+    };
 
-void gpio_event_string(char *buf, uint32_t events) {
     for (uint i = 0; i < 4; i++) {
         uint mask = (1 << i);
         if (events & mask) {
@@ -43,7 +41,7 @@ void gpio_event_string(char *buf, uint32_t events) {
 }
 
 void gpio_callback(uint gpio, uint32_t events) {
-
+    static char event_str[128];
     // Put the GPIO event(s) that just happened into event_str
     // so we can print it
     gpio_event_string(event_str, events);
@@ -95,16 +93,6 @@ int main()
     stdio_init_all();
 
     printf("Pico is alive. \n");
-
-    /*const uint LED_PIN = BACKLIGHT_LED;
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-    while (true) {
-        gpio_put(LED_PIN, 1);
-        sleep_ms(250);
-        gpio_put(LED_PIN, 0);
-        sleep_ms(250);
-    }*/
 
     printf("Initialising backlight. \n");
     backlight_init(alarm_callback);
