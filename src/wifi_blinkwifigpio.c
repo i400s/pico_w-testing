@@ -54,9 +54,7 @@ void gpio_callback(uint gpio, uint32_t events) {
             msp2807_reset_irq();
             break;
         case MCP9808_IRQ:
-            for (uint8_t i = 0; i < 4; i++) {
-                mcp9808_reset_irq(i);
-            }
+            mcp9808_reset_irq();
             break;
     }
     printf("\n");
@@ -73,6 +71,7 @@ int64_t alarm_callback(alarm_id_t id, void *user_data) {
 
 bool timer_callback(repeating_timer_t *rt) {
     cyw43_blink_led(rt->alarm_id);
+    mcp9808_process(rt);
     return true;
 }
 
@@ -110,7 +109,7 @@ int main()
     i2c0_init();
 
     printf("Initialising mcp9808 devices. \n");
-    mcp9808_init(gpio_callback);
+    mcp9808_init(gpio_callback, timer_callback);
 
     if (cyw43_arch_init()) {
         printf("Wi-Fi init failed");
@@ -163,9 +162,6 @@ int main()
         rtc_get_datetime(&t);
         datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
         printf("%s      \n", datetime_str);
-
-        mcp9808_process();
-
     }
 
     // While we will never get here, this is the clean up.

@@ -15,7 +15,9 @@ const uint8_t REG_TEMP_CRIT = 0x04;
 const uint8_t REG_TEMP_AMB = 0x05;
 const uint8_t REG_RESOLUTION = 0x08;
 
-void mcp9808_init(gpio_irq_callback_t callback) {
+static repeating_timer_t timer;
+
+void mcp9808_init(gpio_irq_callback_t irq_callback, repeating_timer_callback_t timer_callback) {
 
     float temp = 0.0;
     int16_t whole = 0;
@@ -52,15 +54,18 @@ void mcp9808_init(gpio_irq_callback_t callback) {
     result = (int16_t)temp << 4 | (int16_t)((temp - (int16_t)temp) / .25) << 2;
     printf("full (%2.2f) (%d) (%x) \n", temp, result, result);
 
-    gpio_set_irq_enabled(MCP9808_IRQ, GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_callback(callback);
-    irq_set_enabled(IO_IRQ_BANK0, true);
-    gpio_pull_up(MCP9808_IRQ);
-
     //
     for (uint8_t i = 0; i < 4; i++) {
         mcp9808_set_limits(i);
     }
+
+    gpio_set_irq_enabled(MCP9808_IRQ, GPIO_IRQ_EDGE_FALL, true);
+    gpio_set_irq_callback(irq_callback);
+    irq_set_enabled(IO_IRQ_BANK0, true);
+    gpio_pull_up(MCP9808_IRQ);
+
+    add_repeating_timer_ms(15000, timer_callback, NULL, &timer);
+
 }
 
 void mcp9808_set_limits(uint8_t i) {
@@ -117,7 +122,7 @@ void mcp9808_set_limits(uint8_t i) {
     }
 
     buf[0] = REG_CONFIG;
-    buf[1] = 0x00; // 21:Hysteresis 1.5°C x02 0.0 x00
+    buf[1] = 0x02; // 21:Hysteresis 1.5°C
     buf[2] = 0x39; // 5:Interrupt clear 3:Alert 0:interrupt mode
     if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) < 0) {
         printf("*WE*");
@@ -139,33 +144,35 @@ void mcp9808_set_limits(uint8_t i) {
 
 }
 
-void mcp9808_reset_irq(uint8_t i) {
+void mcp9808_reset_irq(void) {
     uint8_t buf[3];
-    printf("(%d ", MCP9808_ADDRESS[i]);
     buf[0] = REG_CONFIG;
     buf[1] = 0;
     buf[2] = 0;
-    if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
-        printf("*WE*");
-    } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
-        printf("*RE*");
-    } else {
-        printf(":%02x%02x*OK*", buf[1], buf[2]);
-        if (buf[2] & (1 << 4)) { // 4:Interrupt this device
-            buf[2] |= (1 << 5); // 5:Interrupt clear
-            printf("\033[0;32m:%02x%02x", buf[1], buf[2]);
-            if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) < 0) {
-                printf("*WE*");
-            } else if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
-                printf("*WE*");
-            } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
-                printf("*RE*");
-            } else {
-                printf(":%02x%02x*OK*", buf[1], buf[2]);
+    for (uint8_t i = 0; i < 4; i++) {
+        printf("(%d ", MCP9808_ADDRESS[i]);
+        if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
+            printf("*WE*");
+        } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
+            printf("*RE*");
+        } else {
+            printf(":%02x%02x*OK*", buf[1], buf[2]);
+            if (buf[2] & (1 << 4)) { // 4:Interrupt this device
+                buf[2] |= (1 << 5); // 5:Interrupt clear
+                printf("\033[0;32m:%02x%02x", buf[1], buf[2]);
+                if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], buf, 3, false) < 0) {
+                    printf("*WE*");
+                } else if (i2c_write_blocking(i2c0, MCP9808_ADDRESS[i], &REG_CONFIG, 1, true) < 0) {
+                    printf("*WE*");
+                } else if (i2c_read_blocking(i2c0, MCP9808_ADDRESS[i], &buf[1], 2, false) < 0) {
+                    printf("*RE*");
+                } else {
+                    printf(":%02x%02x*OK*", buf[1], buf[2]);
+                }
+                printf("\033[0m");
             }
-            printf("\033[0m");
+            printf(") ");
         }
-        printf(") ");
     }
 
 }
@@ -200,7 +207,11 @@ float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte) {
     return temperature;
 }
 
-void mcp9808_process(void) {
+void mcp9808_process(repeating_timer_t *rt) {
+
+    if (rt->alarm_id != timer.alarm_id) {
+        return;
+    }
 
     uint8_t buf[2];
     uint16_t upper_byte;
