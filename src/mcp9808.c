@@ -12,8 +12,9 @@ static void mcp9808_check_limits(uint8_t upper_byte);
 static float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte);
 
 //The bus address is determined by the state of pins A0, A1 and A2 on the MCP9808 board
-const uint8_t MCP9808_ADDRESS[3] = {0x18, 0x1A, 0x1B};
-const uint8_t MCP9808_DEV_COUNT = 3;
+const uint8_t MCP9808_ADDRESS[2] = {0x18, 0x19};
+const uint8_t MCP9808_DEV_COUNT = 2;
+const int32_t MCP9808_CALLBACK_TIME = 30000; // 30 Seconds
 //hardware registers
 const uint8_t REG_POINTER = 0x00;
 const uint8_t REG_CONFIG = 0x01;
@@ -57,7 +58,7 @@ void mcp9808_init(gpio_irq_callback_t irq_callback, repeating_timer_callback_t t
     irq_set_enabled(IO_IRQ_BANK0, true);
     gpio_pull_up(MCP9808_IRQ);
 
-    add_repeating_timer_ms(15000, timer_callback, NULL, &timer);
+    add_repeating_timer_ms(MCP9808_CALLBACK_TIME, timer_callback, NULL, &timer);
 
 }
 
