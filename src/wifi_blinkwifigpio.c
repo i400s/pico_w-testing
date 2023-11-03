@@ -6,7 +6,7 @@
 #include "hardware/i2c.h"
 #include "pico/util/datetime.h"
 #include "src/mcp9808.h"
-#include "src/ntp_cyw43.h"
+#include "src/cyw43_ntp.h"
 #include "src/msp2807.h"
 #include "src/cyw43_blink_led.h"
 

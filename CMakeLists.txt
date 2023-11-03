@@ -48,7 +48,7 @@ add_compile_options(-Werror=implicit-function-declaration)
 add_executable(${PROJECT_NAME}
         src/cyw43_blink_led.c
         src/mcp9808.c
-        src/ntp_cyw43.c
+        src/cyw43_ntp.c
         src/msp2807.c
         src/wifi_blinkwifigpio.c
         )

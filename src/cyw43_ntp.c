@@ -1,4 +1,4 @@
-#include "src/ntp_cyw43.h"
+#include "src/cyw43_ntp.h"
 #include "lwip/dns.h"
 
 
