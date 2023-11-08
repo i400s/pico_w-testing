@@ -4,7 +4,7 @@
 #include "pico/stdlib.h"
 #include "hardware/irq.h"
 #include "hardware/i2c.h"
-#include "pico/util/datetime.h"
+#include "hardware/rtc.h"
 #include "src/mcp9808.h"
 #include "src/cyw43_ntp.h"
 #include "src/msp2807.h"
@@ -111,61 +111,16 @@ int main()
     printf("Initialising mcp9808 devices. \n");
     mcp9808_init(gpio_callback, timer_callback);
 
-    if (cyw43_arch_init()) {
-        printf("Wi-Fi init failed");
-        return -1;
-    }
+    printf("Initialising rtc. \n");
+    rtc_init();
+
+    printf("Initialising cyw43 for ntp \n");
+    cyw43_ntp_init();
 
     printf("Initialising cyw43 blink led \n");
     cyw43_blink_led_init(timer_callback);
 
-    char datetime_buf[256];
-    char *datetime_str = &datetime_buf[0];
-
-    // Start on Friday 5th of June 2020 15:45:00
-    datetime_t t = {
-            .year  = 2020,
-            .month = 06,
-            .day   = 05,
-            .dotw  = 5, // 0 is Sunday, so 5 is Friday
-            .hour  = 15,
-            .min   = 45,
-            .sec   = 00
-    };
-
-    // Start the RTC
-    rtc_init();
-    rtc_set_datetime(&t);
-
-    // clk_sys is >2000x faster than clk_rtc, so datetime is not updated immediately when rtc_get_datetime() is called.
-    // tbe delay is up to 3 RTC clock cycles (which is 64us with the default clock settings)
-    sleep_us(64);
-
-    cyw43_arch_enable_sta_mode();
-
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 10000)) {
-        printf("failed to connect\n");
-        return -1;
-    }
-
-    // Initialise ntp communication chanel
-    NTP_T *state = ntp_init();
-    if (!state) {
-        printf("Failed to initialise ntp\n");
-        return -1;
-    }
-
     while (true) {
-        continue;
-        ntp_initiate_request(state);
-
-        rtc_get_datetime(&t);
-        datetime_to_str(datetime_str, sizeof(datetime_buf), &t);
-        printf("%s      \n", datetime_str);
+        tight_loop_contents;
     }
-
-    // While we will never get here, this is the clean up.
-    free(state);
-    cyw43_arch_deinit();
-
 }

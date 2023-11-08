@@ -1,6 +1,96 @@
-#include "src/cyw43_ntp.h"
+#include "pico/cyw43_arch.h"
+#include "hardware/rtc.h"
 #include "lwip/dns.h"
+#include "pico/util/datetime.h"
+#include "src/cyw43_ntp.h"
 
+#define NTP_SERVER "pool.ntp.org"
+#define NTP_MSG_LEN 48
+#define NTP_PORT 123
+#define NTP_DELTA 2208988800 // seconds between 1 Jan 1900 and 1 Jan 1970
+#define NTP_TEST_TIME (30 * 1000)
+#define NTP_RESEND_TIME (10 * 1000)
+#define NTP_CALLBACK_TIME (60 * 60 * 1000)
+#define NTP_LOGON_TIMEOUT (30 * 1000)
+
+#define ntp_packet_li(packet)   (uint8_t) ((packet->li_vn_mode & 0xC0) >> 6) // (li   & 11 000 000) >> 6
+#define ntp_packet_vn(packet)   (uint8_t) ((packet->li_vn_mode & 0x38) >> 3) // (vn   & 00 111 000) >> 3
+#define ntp_packet_mode(packet) (uint8_t) ((packet->li_vn_mode & 0x07) >> 0) // (mode & 00 000 111) >> 0
+
+static repeating_timer_t timer;
+typedef struct NTP_T_ {
+    ip_addr_t ntp_server_address;
+    bool dns_request_sent;
+    struct udp_pcb *ntp_pcb;
+    absolute_time_t ntp_test_time;
+    alarm_id_t ntp_resend_alarm;
+} NTP_T;
+
+// ntp time stamp structure
+struct ntp_ts_t {
+    uint32_t seconds;
+    uint32_t fraction;
+};
+
+static void ntp_result(NTP_T* state, int status, time_t *result);
+static int64_t ntp_failed_handler(alarm_id_t id, void *user_data);
+static void ntp_request(NTP_T *state);
+static int64_t ntp_failed_handler(alarm_id_t id, void *user_data);
+static void ntp_dns_found(const char *hostname, const ip_addr_t *ipaddr, void *arg);
+static void ntp_to_timeval(struct ntp_ts_t *ntp, struct timeval *tv);
+static void timeval_to_ntp(struct timeval *tv, struct ntp_ts_t *ntp);
+static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port);
+static NTP_T* cyw43_ntp_get_state(void);
+static int32_t cyw43_ntp_initiate_request(void);
+static bool cyw43_ntp_process(repeating_timer_t *rt);
+
+static repeating_timer_t timer;
+
+void cyw43_ntp_init() {
+    if (cyw43_arch_init()) {
+        printf("Wi-Fi init failed \n");
+        return;
+    }
+    cyw43_arch_enable_sta_mode();
+    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, NTP_LOGON_TIMEOUT)) {
+        printf("Connect to local Wi-Fi failed to initiate \n");
+        return;
+    }
+
+    cyw43_ntp_initiate_request();
+
+    add_repeating_timer_ms(NTP_CALLBACK_TIME, cyw43_ntp_process, NULL, &timer);
+}
+
+bool cyw43_ntp_process(repeating_timer_t *rt) {
+    //if (rt->alarm_id != timer.alarm_id) {
+    //    return;
+    //} else {
+        cyw43_ntp_initiate_request();
+        return true;
+//    }
+}
+
+
+// Perform initialisation
+NTP_T* cyw43_ntp_get_state(void) {
+    static NTP_T *state;
+    if (!state) {
+        state = (NTP_T*)calloc(1, sizeof(NTP_T));
+        if (!state) {
+            printf("failed to allocate state\n");
+            return NULL;
+        }
+        state->ntp_pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
+        if (!state->ntp_pcb) {
+            printf("failed to create pcb\n");
+            free(state);
+            return NULL;
+        }
+        udp_recv(state->ntp_pcb, ntp_recv, state);
+    }
+    return state;
+}
 
 // Called with results of operation
 static void ntp_result(NTP_T* state, int status, time_t *result) {
@@ -16,9 +106,7 @@ static void ntp_result(NTP_T* state, int status, time_t *result) {
             .min   = utc->tm_min,
             .sec   = utc->tm_sec
         };
-        printf("got ntp response: %02d/%02d/%04d %02d:%02d:%02d\n", t.day, t.month, t.year,
-               t.hour, t.min, t.sec);
-        printf("Setting rtc\n");
+        printf("rtc(%02d/%02d/%04d %02d:%02d:%02d) \n", t.day, t.month, t.year, t.hour, t.min, t.sec);
         rtc_set_datetime(&t);
     }
 
@@ -61,7 +149,7 @@ static void ntp_dns_found(const char *hostname, const ip_addr_t *ipaddr, void *a
     NTP_T *state = (NTP_T*)arg;
     if (ipaddr) {
         state->ntp_server_address = *ipaddr;
-        printf("ntp address %s\n", ipaddr_ntoa(ipaddr));
+        printf("Addr(%s) ", ipaddr_ntoa(ipaddr));
         ntp_request(state);
     } else {
         printf("ntp dns request failed\n");
@@ -86,64 +174,30 @@ static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_ad
     NTP_T *state = (NTP_T*)arg;
     uint8_t mode = pbuf_get_at(p, 0) & 0x7;
     uint8_t stratum = pbuf_get_at(p, 1);
-    struct ntp_packet_t *ntp_packet;
-    ntp_packet = (struct ntp_packet_t *)calloc(1, sizeof(struct ntp_packet_t));
-    if (!ntp_packet) {
-        printf("failed to allocate ntp_data\n");
-        ntp_result(state, -1, NULL);
-    } else if (ip_addr_cmp(addr, &state->ntp_server_address) && port == NTP_PORT && p->tot_len == NTP_MSG_LEN &&
+    if (ip_addr_cmp(addr, &state->ntp_server_address) && port == NTP_PORT && p->tot_len == NTP_MSG_LEN &&
         mode == 0x4 && stratum != 0) {
         uint8_t seconds_buf[4] = {0};
         pbuf_copy_partial(p, seconds_buf, sizeof(seconds_buf), 40);
         uint32_t seconds_since_1900 = seconds_buf[0] << 24 | seconds_buf[1] << 16 | seconds_buf[2] << 8 | seconds_buf[3];
         uint32_t seconds_since_1970 = seconds_since_1900 - NTP_DELTA;
+        printf("SecsSince1970(%0lu) ", seconds_since_1970);
         time_t epoch = seconds_since_1970;
-        printf("Seconds since 1970 (%0lu)\n", seconds_since_1970);
-        ntp_result(state, 0, &epoch);
 
         uint8_t fract_buf[4] = {0};
         pbuf_copy_partial(p, fract_buf, sizeof(fract_buf), 44);
         uint32_t fractional_seconds = fract_buf[0] << 24 | fract_buf[1] << 16 | fract_buf[2] << 8 | fract_buf[3];
-        printf("Fractional seconds (%0lu)\n", fractional_seconds);
-
-        printf("sizeof(ntp_packet) %0u\n", sizeof(ntp_packet));
-        pbuf_copy_partial(p, ntp_packet, sizeof(*ntp_packet), 0);
-        printf("mode %0u\n", mode);
-        printf("ntp_packet_mode: %0u\n", ntp_packet_mode(ntp_packet));
-        // These two fields contain the time-stamp seconds as the packet left the NTP server.
-        // The number of seconds correspond to the seconds passed since 1900.
-        // ntohl() converts the bit/byte order from the network's to host's "endianness".
-        ntp_packet->transmit_timestamp.seconds = ntohl(ntp_packet->transmit_timestamp.seconds); // Time-stamp seconds.
-        ntp_packet->transmit_timestamp.fraction = ntohl(ntp_packet->transmit_timestamp.fraction); // Time-stamp fraction of a second.
-        printf("seconds since (%0u : %0u)\n", seconds_since_1900, ntp_packet->transmit_timestamp.seconds);
-        printf("%0u %0u %0u\n", ntp_packet_li(ntp_packet), ntp_packet_mode(ntp_packet), ntp_packet_vn(ntp_packet));
+        printf("FracSecs(%0lu) ", fractional_seconds);
+        ntp_result(state, 0, &epoch);
     } else {
-        printf("invalid ntp response\n");
+        printf("invalid ntp response \n");
         ntp_result(state, -1, NULL);
     }
-    free(ntp_packet);
     pbuf_free(p);
 }
 
-// Perform initialisation
-NTP_T* ntp_init(void) {
-    NTP_T *state = (NTP_T*)calloc(1, sizeof(NTP_T));
-    if (!state) {
-        printf("failed to allocate state\n");
-        return NULL;
-    }
-    state->ntp_pcb = udp_new_ip_type(IPADDR_TYPE_ANY);
-    if (!state->ntp_pcb) {
-        printf("failed to create pcb\n");
-        free(state);
-        return NULL;
-    }
-    udp_recv(state->ntp_pcb, ntp_recv, state);
-    return state;
-}
-
 // Periodically send an ntp request which will be serviced via callbacks.
-int32_t ntp_initiate_request(NTP_T *state) {
+int32_t cyw43_ntp_initiate_request() {
+    NTP_T *state = cyw43_ntp_get_state();
     if (absolute_time_diff_us(get_absolute_time(), state->ntp_test_time) < 0 && !state->dns_request_sent) {
         // Set alarm in case udp requests are lost
         state->ntp_resend_alarm = add_alarm_in_ms(NTP_RESEND_TIME, ntp_failed_handler, state, true);
