@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "hardware/i2c.h"
+#include "hardware/rtc.h"
 
 #include "src/mcp9808.h"
 #define LSB(w) ((uint8_t) ((w) & 0xFF))
@@ -8,12 +9,13 @@
 static uint16_t mcp9808_calc_register(float temp);
 static void mcp9808_set_limits(uint8_t i, u_int16_t reg_frost, uint16_t reg_heating, u_int16_t reg_conditioning);
 static void mcp9808_print_temp(void);
+static void mcp9808_print_time(void);
 static void mcp9808_check_limits(uint8_t upper_byte);
 static float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte);
 
 //The bus address is determined by the state of pins A0, A1 and A2 on the MCP9808 board
-const uint8_t MCP9808_ADDRESS[2] = {0x18, 0x19};
-const uint8_t MCP9808_DEV_COUNT = 2;
+#define MCP9808_DEV_COUNT 2
+const uint8_t MCP9808_ADDRESS[MCP9808_DEV_COUNT] = {0x18, 0x19};
 const int32_t MCP9808_CALLBACK_TIME = 30000; // 30 Seconds
 //hardware registers
 const uint8_t REG_POINTER = 0x00;
@@ -37,8 +39,8 @@ void mcp9808_init(gpio_irq_callback_t irq_callback, repeating_timer_callback_t t
     uint16_t reg_frost = mcp9808_calc_register(frost + 1);
     float adj_frost = mcp9808_convert_temp(MSB(reg_frost), LSB(reg_frost));
     // Heating calculation is .75°C higher for +.75°C to -.75°C hysteresis.
-    float heating = 20.25;
-    uint16_t reg_heating = mcp9808_calc_register(heating + .75);
+    float heating = 20.50;
+    uint16_t reg_heating = mcp9808_calc_register(heating + 0.00);
     float adj_heating = mcp9808_convert_temp(MSB(reg_heating), LSB(reg_heating));
     // Air conditioning calculation is 1.5°C higher for +1.5°C to -.00°C hysteresis.
     float conditioning = 24.00;
@@ -199,6 +201,13 @@ void mcp9808_process(repeating_timer_t *rt) {
     }
 }
 
+void mcp9808_print_time() {
+    datetime_t t;
+    rtc_get_datetime(&t);
+    printf("(%02d/%02d/%04d %02d:%02d:%02d) ", t.day, t.month, t.year, t.hour, t.min, t.sec);
+
+}
+
 void mcp9808_print_temp() {
     uint8_t buf[2];
     uint16_t upper_byte;
@@ -207,6 +216,8 @@ void mcp9808_print_temp() {
     float temperature;
 
     printf("Temp: ");
+
+    mcp9808_print_time();
 
     for (uint8_t i = 0; i < MCP9808_DEV_COUNT; i++) {
         // Start reading ambient temperature register for 2 bytes
