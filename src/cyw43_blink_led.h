@@ -4,7 +4,6 @@
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
 
-void cyw43_blink_led_init(repeating_timer_callback_t callback);
-void cyw43_blink_led(alarm_id_t id);
+void cyw43_blink_led_init(void);
 
 #endif

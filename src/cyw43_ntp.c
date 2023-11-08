@@ -47,9 +47,11 @@ static bool cyw43_ntp_process(repeating_timer_t *rt);
 static repeating_timer_t timer;
 
 void cyw43_ntp_init() {
-    if (cyw43_arch_init()) {
-        printf("Wi-Fi init failed \n");
-        return;
+    if (!cyw43_is_initialized(&cyw43_state)) {
+        if (cyw43_arch_init()) {
+            printf("Wi-Fi init failed \n");
+            return;
+        }
     }
     cyw43_arch_enable_sta_mode();
     if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, NTP_LOGON_TIMEOUT)) {
@@ -63,12 +65,8 @@ void cyw43_ntp_init() {
 }
 
 bool cyw43_ntp_process(repeating_timer_t *rt) {
-    //if (rt->alarm_id != timer.alarm_id) {
-    //    return;
-    //} else {
         cyw43_ntp_initiate_request();
         return true;
-//    }
 }
 
 

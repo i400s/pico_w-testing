@@ -12,6 +12,7 @@ static void mcp9808_print_temp(void);
 static void mcp9808_print_time(void);
 static void mcp9808_check_limits(uint8_t upper_byte);
 static float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte);
+static bool mcp9808_process(repeating_timer_t *rt);
 
 //The bus address is determined by the state of pins A0, A1 and A2 on the MCP9808 board
 #define MCP9808_DEV_COUNT 2
@@ -32,7 +33,7 @@ static uint16_t mcp9808_calc_register(float temp) {
     return (int16_t)temp << 4 | (int16_t)((temp - (int16_t)temp) / .25) << 2;
 }
 
-void mcp9808_init(gpio_irq_callback_t irq_callback, repeating_timer_callback_t timer_callback) {
+void mcp9808_init(gpio_irq_callback_t irq_callback) {
 
     // Frost protection calculation is 1°C higher for +1°C to -.5°C hysteresis.
     float frost = 10.00;
@@ -60,7 +61,9 @@ void mcp9808_init(gpio_irq_callback_t irq_callback, repeating_timer_callback_t t
     irq_set_enabled(IO_IRQ_BANK0, true);
     gpio_pull_up(MCP9808_IRQ);
 
-    add_repeating_timer_ms(MCP9808_CALLBACK_TIME, timer_callback, NULL, &timer);
+    mcp9808_print_temp();
+
+    add_repeating_timer_ms(MCP9808_CALLBACK_TIME, mcp9808_process, NULL, &timer);
 
 }
 
@@ -192,20 +195,17 @@ float mcp9808_convert_temp(uint8_t upper_byte, uint8_t lower_byte) {
     return temperature;
 }
 
-void mcp9808_process(repeating_timer_t *rt) {
-
-    if (rt->alarm_id != timer.alarm_id) {
-        return;
-    } else {
-        mcp9808_print_temp();
-    }
+bool mcp9808_process(repeating_timer_t *rt){
+    mcp9808_print_temp();
+    return true;
 }
 
 void mcp9808_print_time() {
     datetime_t t;
-    rtc_get_datetime(&t);
-    printf("(%02d/%02d/%04d %02d:%02d:%02d) ", t.day, t.month, t.year, t.hour, t.min, t.sec);
-
+    if (rtc_running()) {
+        rtc_get_datetime(&t);
+        printf("(%02d/%02d/%04d %02d:%02d:%02d) ", t.day, t.month, t.year, t.hour, t.min, t.sec);
+    }
 }
 
 void mcp9808_print_temp() {

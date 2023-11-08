@@ -69,12 +69,6 @@ int64_t alarm_callback(alarm_id_t id, void *user_data) {
     return 0;
 }
 
-bool timer_callback(repeating_timer_t *rt) {
-    cyw43_blink_led(rt->alarm_id);
-    mcp9808_process(rt);
-    return true;
-}
-
 static void i2c0_init(void) {
     i2c_init(i2c0, 400 * 1000);
     gpio_set_function(I2C0_SCL_PIN, GPIO_FUNC_I2C);
@@ -97,7 +91,13 @@ int main()
 
     stdio_init_all();
 
-    printf("Pico is alive. \n");
+    printf("\n\nPico is alive. \n");
+
+    printf("Initialising rtc. \n");
+    rtc_init();
+
+    printf("Initialising i2c0. \n");
+    i2c0_init();
 
     printf("Initialising backlight. \n");
     backlight_init(alarm_callback);
@@ -105,20 +105,14 @@ int main()
     printf("Initialising touch screen. \n");
     touchscreen_init(gpio_callback);
 
-    printf("Initialising i2c0. \n");
-    i2c0_init();
-
     printf("Initialising mcp9808 devices. \n");
-    mcp9808_init(gpio_callback, timer_callback);
+    mcp9808_init(gpio_callback);
 
-    printf("Initialising rtc. \n");
-    rtc_init();
+    printf("Initialising cyw43 for blink led \n");
+    cyw43_blink_led_init();
 
     printf("Initialising cyw43 for ntp \n");
     cyw43_ntp_init();
-
-    printf("Initialising cyw43 blink led \n");
-    cyw43_blink_led_init(timer_callback);
 
     while (true) {
         tight_loop_contents;
